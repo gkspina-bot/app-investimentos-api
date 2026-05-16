@@ -1,0 +1,8 @@
+.env
+node_modules
+portfolio.db
+*.log
+.DS_Store
+.vscode
+dist
+build

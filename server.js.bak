@@ -1,0 +1,146 @@
+﻿const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const Database = require('better-sqlite3');
+const Binance = require('binance-api-node').default;
+require('dotenv').config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(express.json());
+app.use(cors());
+app.use(express.static(__dirname));
+
+// Banco de dados
+const db = new Database('investimentos.db');
+
+const createTable = db.prepare(`
+  CREATE TABLE IF NOT EXISTS portfolio (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    avg_price REAL NOT NULL,
+    total_cost REAL NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+createTable.run();
+
+// Cliente Binance
+let binanceClient = null;
+if (process.env.BINANCE_API_KEY && process.env.BINANCE_SECRET) {
+  binanceClient = Binance({
+    apiKey: process.env.BINANCE_API_KEY,
+    apiSecret: process.env.BINANCE_SECRET,
+  });
+}
+
+// Servir index.html na raiz
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// API Endpoints
+
+// GET /api/status
+app.get('/api/status', (req, res) => {
+  try {
+    res.json({ status: 'OK', message: 'Servidor funcionando perfeitamente!', timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/portfolio
+app.get('/api/portfolio', (req, res) => {
+  try {
+    const stmt = db.prepare('SELECT * FROM portfolio ORDER BY created_at DESC');
+    const portfolio = stmt.all();
+    res.json(portfolio);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/portfolio
+app.post('/api/portfolio', (req, res) => {
+  try {
+    const { symbol, quantity, avg_price } = req.body;
+    if (!symbol || quantity == null || avg_price == null) {
+      return res.status(400).json({ error: 'Faltam campos obrigatórios: symbol, quantity, avg_price' });
+    }
+    const total_cost = quantity * avg_price;
+    const stmt = db.prepare('INSERT INTO portfolio (symbol, quantity, avg_price, total_cost) VALUES (?, ?, ?, ?)');
+    const result = stmt.run(symbol, quantity, avg_price, total_cost);
+    res.json({ success: true, id: result.lastInsertRowid });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/portfolio/:id
+app.put('/api/portfolio/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'ID inválido' });
+    }
+    const { symbol, quantity, avg_price } = req.body;
+    if (!symbol || quantity == null || avg_price == null) {
+      return res.status(400).json({ error: 'Faltam campos obrigatórios: symbol, quantity, avg_price' });
+    }
+    const total_cost = quantity * avg_price;
+    const stmt = db.prepare('UPDATE portfolio SET symbol = ?, quantity = ?, avg_price = ?, total_cost = ? WHERE id = ?');
+    const result = stmt.run(symbol, quantity, avg_price, total_cost, id);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Item não encontrado' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/portfolio/:id
+app.delete('/api/portfolio/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'ID inválido' });
+    }
+    const stmt = db.prepare('DELETE FROM portfolio WHERE id = ?');
+    const result = stmt.run(id);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Item não encontrado' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/binance
+app.get('/api/binance', async (req, res) => {
+  try {
+    if (!binanceClient) {
+      return res.status(401).json({ error: 'Chaves da API Binance não configuradas' });
+    }
+    const account = await binanceClient.accountInfo({});
+    res.json(account);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`Servidor rodando em http://localhost:${PORT}`);
+});
+
+// Fechar DB ao encerrar
+process.on('SIGINT', () => {
+  db.close();
+  process.exit(0);
+});
